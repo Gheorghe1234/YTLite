@@ -45,6 +45,18 @@ static void YTLEQLoadDefaults(void) {
         gYTLGains[i] = (saved.count == 5) ? [saved[i] floatValue] : 0.0f;
 }
 
+// ── NBandEQ constants (not exposed in all SDK versions) ──────────────────────
+
+enum {
+    kYTLNBandEQ_EQType       = 0,
+    kYTLNBandEQ_Frequency    = 1000,
+    kYTLNBandEQ_Bandwidth    = 2000,
+    kYTLNBandEQ_Gain         = 3000,
+    kYTLNBandEQ_BypassBand   = 4000,
+    kYTLNBandEQ_NumBandsProp = 2200,
+    kYTLNBandEQ_Parametric   = 0,
+};
+
 // ── Per-tap context ───────────────────────────────────────────────────────────
 
 static const float kBandFreqs[5] = {60.0f, 230.0f, 910.0f, 4000.0f, 14000.0f};
@@ -120,7 +132,7 @@ static void TapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
     if (!comp || AudioComponentInstanceNew(comp, &ctx->eqUnit) != noErr) return;
 
     UInt32 numBands = 5;
-    AudioUnitSetProperty(ctx->eqUnit, kAUNBandEQProperty_NumberOfBands,
+    AudioUnitSetProperty(ctx->eqUnit, kYTLNBandEQ_NumBandsProp,
                          kAudioUnitScope_Global, 0, &numBands, sizeof(numBands));
     AudioUnitSetProperty(ctx->eqUnit, kAudioUnitProperty_StreamFormat,
                          kAudioUnitScope_Input, 0, fmt, sizeof(*fmt));
@@ -132,15 +144,15 @@ static void TapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
                          kAudioUnitScope_Input, 0, &cb, sizeof(cb));
 
     for (UInt32 i = 0; i < 5; i++) {
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_EQType + i,
-                              kAudioUnitScope_Global, 0, kAUNBandEQFilterType_Parametric, 0);
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_Frequency + i,
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_EQType + i,
+                              kAudioUnitScope_Global, 0, kYTLNBandEQ_Parametric, 0);
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_Frequency + i,
                               kAudioUnitScope_Global, 0, kBandFreqs[i], 0);
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_Bandwidth + i,
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_Bandwidth + i,
                               kAudioUnitScope_Global, 0, 1.0f, 0);
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_Gain + i,
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_Gain + i,
                               kAudioUnitScope_Global, 0, 0.0f, 0);
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_BypassBand + i,
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_BypassBand + i,
                               kAudioUnitScope_Global, 0, 0.0f, 0);
     }
 
@@ -169,7 +181,7 @@ static void TapProcess(MTAudioProcessingTapRef tap, CMItemCount numberFrames,
     if (!ctx || !ctx->ready || !gYTLEQEnabled) return;
 
     for (UInt32 i = 0; i < 5; i++) {
-        AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_Gain + i,
+        AudioUnitSetParameter(ctx->eqUnit, kYTLNBandEQ_Gain + i,
                               kAudioUnitScope_Global, 0, gYTLGains[i], 0);
     }
 
