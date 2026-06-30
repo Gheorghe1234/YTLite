@@ -57,6 +57,12 @@ on:
         required: true
         type: string
 
+      eq_url:
+        description: "Equalizer tweak URL (from Releases → GioTube Equalizer → GioTubeEQ.deb)"
+        default: ""
+        required: false
+        type: string
+
       display_name:
         description: "App Name (Optional)"
         default: "YouTube"
@@ -84,6 +90,7 @@ jobs:
       enable_ytabc: ${{ inputs.enable_ytabc }}
       enable_demc: ${{ inputs.enable_demc }}
       tweak_version: ${{ inputs.tweak_version }}
+      eq_url: ${{ inputs.eq_url }}
 
   package:
     name: Generate Cyan/TrollFools

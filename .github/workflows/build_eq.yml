@@ -1,0 +1,95 @@
+name: Build Equalizer Tweak
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Equalizer.x'
+
+jobs:
+  build:
+    name: Build GioTubeEQ
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install make ldid dpkg
+
+      - name: Set PATH
+        run: |
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+
+      - name: Cache Theos
+        id: theos
+        uses: actions/cache@v5
+        env:
+          cache-name: theos_cache_9bc7340
+        with:
+          path: theos/
+          key: ${{ env.cache-name }}
+          restore-keys: ${{ env.cache-name }}
+
+      - name: Setup Theos
+        if: steps.theos.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          ref: 9bc73406cf80b711ef4d02c15ff1dedc4478a275
+          path: theos
+          submodules: recursive
+
+      - name: Download iOS SDK
+        if: steps.theos.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
+          git checkout
+          mv *.sdk $THEOS/sdks
+
+      - name: Create roothide stub
+        run: |
+          cat > $THEOS/include/roothide.h << 'EOF'
+          #pragma once
+          #define jbroot(path) (path)
+          static inline const char* jbroot_char(const char* path) { return path; }
+          EOF
+
+      - name: Build GioTubeEQ
+        run: |
+          mkdir -p EQAddon
+          cp Equalizer.x EQAddon/Equalizer.x
+
+          printf 'Package: com.giotube.equalizer\nName: GioTube Equalizer\nVersion: 1.0\nArchitecture: iphoneos-arm\nDescription: 5-band EQ for YouTube\n' > EQAddon/control
+          printf '{ Filter = { Bundles = ("com.google.ios.youtube"); }; }' > EQAddon/GioTubeEQ.plist
+
+          cat > EQAddon/Makefile << 'EOFMK'
+          ARCHS = arm64
+          TARGET := iphone:clang:16.5:13.0
+          DEBUG=0
+          FINALPACKAGE=1
+          include $(THEOS)/makefiles/common.mk
+          TWEAK_NAME = GioTubeEQ
+          GioTubeEQ_FILES = Equalizer.x
+          GioTubeEQ_FRAMEWORKS = UIKit Foundation AVFoundation AudioToolbox MediaToolbox
+          GioTubeEQ_CFLAGS = -fobjc-arc -Wno-misleading-indentation
+          include $(THEOS_MAKE_PATH)/tweak.mk
+          EOFMK
+
+          cd EQAddon && make clean package DEBUG=0 FINALPACKAGE=1
+          cp packages/*.deb ${{ github.workspace }}/GioTubeEQ.deb
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: eq-latest
+          name: GioTube Equalizer (latest)
+          files: GioTubeEQ.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

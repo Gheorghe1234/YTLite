@@ -43,6 +43,11 @@ on:
         required: false
         default: ""
 
+      eq_url:
+        type: string
+        required: false
+        default: ""
+
 jobs:
   build-tweaks:
     name: Build Tweaks
@@ -102,33 +107,9 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout this repo (for Equalizer.x)
-        uses: actions/checkout@v4
-        with:
-          path: YTLite
-          sparse-checkout: Equalizer.x
-          sparse-checkout-cone-mode: false
-
-      - name: Build Equalizer addon
-        run: |
-          mkdir -p EQAddon
-          cp YTLite/Equalizer.x EQAddon/Equalizer.x
-          printf 'Package: com.giotube.equalizer\nName: GioTube Equalizer\nVersion: 1.0\nArchitecture: iphoneos-arm\nDescription: 5-band EQ\n' > EQAddon/control
-          printf '{ Filter = { Bundles = ("com.google.ios.youtube"); }; }' > EQAddon/GioTubeEQ.plist
-          cat > EQAddon/Makefile << 'EOFMK'
-          ARCHS = arm64
-          TARGET := iphone:clang:16.5:13.0
-          DEBUG=0
-          FINALPACKAGE=1
-          include $(THEOS)/makefiles/common.mk
-          TWEAK_NAME = GioTubeEQ
-          GioTubeEQ_FILES = Equalizer.x
-          GioTubeEQ_FRAMEWORKS = UIKit Foundation AVFoundation AudioToolbox MediaToolbox
-          GioTubeEQ_CFLAGS = -fobjc-arc -Wno-misleading-indentation
-          include $(THEOS_MAKE_PATH)/tweak.mk
-          EOFMK
-          cd EQAddon && make clean package DEBUG=0 FINALPACKAGE=1
-          mv packages/*.deb ../eq.deb
+      - name: Download Equalizer addon
+        if: ${{ inputs.eq_url != '' }}
+        run: wget "${{ inputs.eq_url }}" --no-verbose -O eq.deb
 
       - name: Clone YouTubeHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
