@@ -102,6 +102,13 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout this repo (for Equalizer.x)
+        uses: actions/checkout@v4
+        with:
+          path: YTLite
+          sparse-checkout: Equalizer.x
+          sparse-checkout-cone-mode: false
+
       - name: Build Equalizer addon
         run: |
           mkdir -p EQAddon
