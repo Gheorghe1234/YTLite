@@ -1,5 +1,8 @@
 #import "YTLite.h"
 
+@interface YTLEqualizerViewController : UIViewController
+@end
+
 @interface YTSettingsSectionItemManager (YTLite)
 - (void)updateYTLiteSectionWithEntry:(id)entry;
 @end
@@ -134,6 +137,19 @@ static NSString *GetCacheSize() {
     }];
 
     [sectionItems addObject:general];
+
+    YTSettingsSectionItem *equalizer = [YTSettingsSectionItemClass itemWithTitle:@"Equalizer"
+        accessibilityIdentifier:@"YTLiteSectionItem"
+        detailTextBlock:^NSString *() { return @"‣"; }
+        selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+            UIViewController *root = [UIApplication sharedApplication].windows.firstObject.rootViewController;
+            while (root.presentedViewController) root = root.presentedViewController;
+            YTLEqualizerViewController *vc = [YTLEqualizerViewController new];
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+            [root presentViewController:nav animated:YES completion:nil];
+            return YES;
+        }];
+    [sectionItems addObject:equalizer];
 
     YTSettingsSectionItem *navbar = [YTSettingsSectionItemClass itemWithTitle:LOC(@"Navbar")
     accessibilityIdentifier:@"YTLiteSectionItem"
