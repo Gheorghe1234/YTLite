@@ -1,14 +1,39 @@
-#import "YTLite.h"
+#import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <MediaToolbox/MediaToolbox.h>
 
-// ── Shared EQ state (UI thread writes, audio thread reads) ────────────────────
+// ── Forward declarations ──────────────────────────────────────────────────────
 
-static float gYTLGains[5]  = {0, 0, 0, 0, 0};  // dB, -12..+12
+@class YTSettingsSectionItem, YTSettingsCell, YTSettingsViewController;
+
+@interface YTAppSettingsPresentationData : NSObject
++ (NSArray *)settingsCategoryOrder;
+@end
+
+@interface YTSettingsSectionItemManager : NSObject
+- (id)parentResponder;
+- (void)updateEQSectionWithEntry:(id)entry;
+@end
+
+@interface YTSettingsViewController : UIViewController
+- (void)setSectionItems:(NSArray *)items forCategory:(NSUInteger)cat title:(NSString *)title icon:(id)icon titleDescription:(id)desc headerHidden:(BOOL)hidden;
+- (void)setSectionItems:(NSArray *)items forCategory:(NSUInteger)cat title:(NSString *)title titleDescription:(id)desc headerHidden:(BOOL)hidden;
+@end
+
+@interface YTSettingsSectionItem : NSObject
++ (instancetype)itemWithTitle:(NSString *)title accessibilityIdentifier:(NSString *)aid detailTextBlock:(NSString *(^)(void))detail selectBlock:(BOOL (^)(YTSettingsCell *, NSUInteger))select;
+@end
+
+// ── Settings section ──────────────────────────────────────────────────────────
+
+static const NSInteger EQSection = 790;
+
+// ── Shared EQ state ───────────────────────────────────────────────────────────
+
+static float gYTLGains[5]  = {0, 0, 0, 0, 0};
 static BOOL  gYTLEQEnabled  = NO;
 
-static const float kBandFreqs[5] = {60.0f, 230.0f, 910.0f, 4000.0f, 14000.0f};
 static NSString * const kGainsKey   = @"ytlEQGains";
 static NSString * const kEnabledKey = @"ytlEQEnabled";
 
@@ -22,11 +47,12 @@ static void YTLEQLoadDefaults(void) {
 
 // ── Per-tap context ───────────────────────────────────────────────────────────
 
+static const float kBandFreqs[5] = {60.0f, 230.0f, 910.0f, 4000.0f, 14000.0f};
+
 typedef struct {
     AudioUnit eqUnit;
-    AudioBufferList *inputBuf;   // temp buffer fed to EQ render callback
+    AudioBufferList *inputBuf;
     UInt32 numChannels;
-    UInt32 bytesPerChannel;      // bytes per channel per max-frames block
     BOOL ready;
 } YTLTapCtx;
 
@@ -46,8 +72,6 @@ static OSStatus EQInputCallback(void *inRefCon,
     }
     return noErr;
 }
-
-// ── MTAudioProcessingTap callbacks ───────────────────────────────────────────
 
 static void TapInit(MTAudioProcessingTapRef tap, void *clientInfo, void **tapStorageOut) {
     YTLTapCtx *ctx = calloc(1, sizeof(YTLTapCtx));
@@ -76,19 +100,17 @@ static void TapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
 
     ctx->numChannels = fmt->mChannelsPerFrame;
     UInt32 bytesPerFrame = fmt->mBytesPerFrame > 0 ? fmt->mBytesPerFrame : 4;
-    ctx->bytesPerChannel = (UInt32)maxFrames * bytesPerFrame;
+    UInt32 bytesPerChan  = (UInt32)maxFrames * bytesPerFrame;
 
-    // Allocate temp input buffer (one buffer per channel, non-interleaved)
     ctx->inputBuf = calloc(1, sizeof(AudioBufferList) +
                               (ctx->numChannels - 1) * sizeof(AudioBuffer));
     ctx->inputBuf->mNumberBuffers = ctx->numChannels;
     for (UInt32 c = 0; c < ctx->numChannels; c++) {
         ctx->inputBuf->mBuffers[c].mNumberChannels = 1;
-        ctx->inputBuf->mBuffers[c].mDataByteSize   = ctx->bytesPerChannel;
-        ctx->inputBuf->mBuffers[c].mData           = malloc(ctx->bytesPerChannel);
+        ctx->inputBuf->mBuffers[c].mDataByteSize   = bytesPerChan;
+        ctx->inputBuf->mBuffers[c].mData           = malloc(bytesPerChan);
     }
 
-    // Create NBandEQ AudioUnit
     AudioComponentDescription desc = {
         .componentType         = kAudioUnitType_Effect,
         .componentSubType      = kAudioUnitSubType_NBandEQ,
@@ -100,7 +122,6 @@ static void TapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
     UInt32 numBands = 5;
     AudioUnitSetProperty(ctx->eqUnit, kAUNBandEQProperty_NumberOfBands,
                          kAudioUnitScope_Global, 0, &numBands, sizeof(numBands));
-
     AudioUnitSetProperty(ctx->eqUnit, kAudioUnitProperty_StreamFormat,
                          kAudioUnitScope_Input, 0, fmt, sizeof(*fmt));
     AudioUnitSetProperty(ctx->eqUnit, kAudioUnitProperty_StreamFormat,
@@ -147,13 +168,11 @@ static void TapProcess(MTAudioProcessingTapRef tap, CMItemCount numberFrames,
     YTLTapCtx *ctx = (YTLTapCtx *)MTAudioProcessingTapGetStorage(tap);
     if (!ctx || !ctx->ready || !gYTLEQEnabled) return;
 
-    // Update gains from shared state (UI thread writes atomically enough for audio)
     for (UInt32 i = 0; i < 5; i++) {
         AudioUnitSetParameter(ctx->eqUnit, kAUNBandEQParam_Gain + i,
                               kAudioUnitScope_Global, 0, gYTLGains[i], 0);
     }
 
-    // Copy source audio to temp input buffer for the render callback
     for (UInt32 b = 0; b < bufferListInOut->mNumberBuffers; b++) {
         UInt32 dst = (b < ctx->numChannels) ? b : ctx->numChannels - 1;
         UInt32 bytes = MIN(bufferListInOut->mBuffers[b].mDataByteSize,
@@ -163,15 +182,12 @@ static void TapProcess(MTAudioProcessingTapRef tap, CMItemCount numberFrames,
         ctx->inputBuf->mBuffers[dst].mDataByteSize = bytes;
     }
 
-    // Render through EQ; output overwrites bufferListInOut in-place
     AudioUnitRenderActionFlags renderFlags = 0;
     AudioTimeStamp ts = {0};
     ts.mFlags = kAudioTimeStampSampleTimeValid;
     AudioUnitRender(ctx->eqUnit, &renderFlags, &ts,
                     0, (UInt32)*numberFramesOut, bufferListInOut);
 }
-
-// ── Inject tap into AVPlayerItem ─────────────────────────────────────────────
 
 static void YTLInjectTap(AVPlayerItem *item) {
     MTAudioProcessingTapCallbacks callbacks;
@@ -184,12 +200,10 @@ static void YTLInjectTap(AVPlayerItem *item) {
     callbacks.process    = TapProcess;
 
     MTAudioProcessingTapRef tap = NULL;
-    OSStatus err = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks,
-                                               kMTAudioProcessingTapCreationFlag_PostEffects,
-                                               &tap);
-    if (err != noErr || !tap) return;
+    if (MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks,
+                                    kMTAudioProcessingTapCreationFlag_PostEffects,
+                                    &tap) != noErr) return;
 
-    // kCMPersistentTrackID_Invalid applies to all audio tracks
     AVMutableAudioMixInputParameters *params = [AVMutableAudioMixInputParameters audioMixInputParameters];
     params.audioTapProcessor = tap;
     CFRelease(tap);
@@ -212,10 +226,56 @@ static void YTLInjectTap(AVPlayerItem *item) {
 }
 %end
 
-// ── Settings UI ───────────────────────────────────────────────────────────────
+// ── Settings hooks ────────────────────────────────────────────────────────────
 
 @interface YTLEqualizerViewController : UIViewController
 @end
+
+%hook YTAppSettingsPresentationData
++ (NSArray *)settingsCategoryOrder {
+    NSArray *order = %orig;
+    NSMutableArray *mutableOrder = [order mutableCopy];
+    // Insert right after the YTLite section (789), or after category 1
+    NSUInteger idx = [order indexOfObject:@(789)];
+    if (idx == NSNotFound) idx = [order indexOfObject:@(1)];
+    if (idx != NSNotFound)
+        [mutableOrder insertObject:@(EQSection) atIndex:idx + 1];
+    return mutableOrder;
+}
+%end
+
+%hook YTSettingsSectionItemManager
+- (void)updateSectionForCategory:(NSUInteger)category withEntry:(id)entry {
+    if (category != EQSection) { %orig; return; }
+    [self updateEQSectionWithEntry:entry];
+}
+
+%new
+- (void)updateEQSectionWithEntry:(id)entry {
+    YTSettingsViewController *vc = [self valueForKey:@"_settingsViewControllerDelegate"];
+    NSMutableArray *items = [NSMutableArray array];
+
+    YTSettingsSectionItem *open = [%c(YTSettingsSectionItem)
+        itemWithTitle:@"Open Equalizer"
+        accessibilityIdentifier:@"GioTubeEQItem"
+        detailTextBlock:^NSString *{ return gYTLEQEnabled ? @"ON" : @"OFF"; }
+        selectBlock:^BOOL(YTSettingsCell *cell, NSUInteger idx) {
+            UIViewController *root = [UIApplication sharedApplication].windows.firstObject.rootViewController;
+            while (root.presentedViewController) root = root.presentedViewController;
+            YTLEqualizerViewController *eqVC = [YTLEqualizerViewController new];
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:eqVC];
+            [root presentViewController:nav animated:YES completion:nil];
+            return YES;
+        }];
+    [items addObject:open];
+
+    BOOL isNew = [vc respondsToSelector:@selector(setSectionItems:forCategory:title:icon:titleDescription:headerHidden:)];
+    isNew ? [vc setSectionItems:items forCategory:EQSection title:@"Equalizer" icon:nil titleDescription:nil headerHidden:NO]
+          : [vc setSectionItems:items forCategory:EQSection title:@"Equalizer" titleDescription:nil headerHidden:NO];
+}
+%end
+
+// ── Equalizer UI ──────────────────────────────────────────────────────────────
 
 @implementation YTLEqualizerViewController {
     UISwitch    *_enableSwitch;
@@ -229,8 +289,6 @@ static void YTLInjectTap(AVPlayerItem *item) {
 
     self.title = @"Equalizer";
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-
-    // Close button
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemDone
         target:self action:@selector(close)];
@@ -279,19 +337,15 @@ static void YTLInjectTap(AVPlayerItem *item) {
     ]];
     [stack addArrangedSubview:toggleRow];
 
-    // Separator
     UIView *sep = [UIView new];
     sep.backgroundColor = [UIColor separatorColor];
     sep.translatesAutoresizingMaskIntoConstraints = NO;
     [sep.heightAnchor constraintEqualToConstant:1].active = YES;
     [stack addArrangedSubview:sep];
 
-    // 5 band sliders
     NSArray *labels = @[@"60 Hz", @"230 Hz", @"910 Hz", @"4 kHz", @"14 kHz"];
-    for (int i = 0; i < 5; i++) {
-        UIView *row = [self makeBandRow:i label:labels[i]];
-        [stack addArrangedSubview:row];
-    }
+    for (int i = 0; i < 5; i++)
+        [stack addArrangedSubview:[self makeBandRow:i label:labels[i]]];
 }
 
 - (UIView *)makeBandRow:(int)index label:(NSString *)label {
@@ -351,7 +405,6 @@ static void YTLInjectTap(AVPlayerItem *item) {
     sl.value = rounded;
     gYTLGains[i] = rounded;
     _valLabels[i].text = [NSString stringWithFormat:@"%+.0f dB", rounded];
-
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:5];
     for (int j = 0; j < 5; j++) [arr addObject:@(gYTLGains[j])];
     [[NSUserDefaults standardUserDefaults] setObject:arr forKey:kGainsKey];
